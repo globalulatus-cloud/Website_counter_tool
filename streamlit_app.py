@@ -1,0 +1,206 @@
+import streamlit as st
+import asyncio
+import pandas as pd
+from io import StringIO
+from logic.scraper import fetch_website_text
+from logic.counter import count_stats
+from logic.crawler import crawl_site
+
+# --- PAGE CONFIG ---
+st.set_page_config(
+    page_title="Ulatus website counter tool",
+    page_icon="🎯",
+    layout="centered"
+)
+
+# --- CUSTOM CSS (Crimson Ulatus Branding) ---
+st.markdown("""
+<style>
+    :root {
+        --brand-crimson: #B4252D;
+    }
+    .main {
+        background-color: #fdfdfd;
+    }
+    h1 {
+        color: var(--brand-crimson) !st.important;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+    .stButton>button {
+        background-color: var(--brand-crimson);
+        color: white;
+        border-radius: 8px;
+        padding: 0.5rem 2rem;
+        font-weight: 600;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #9c1f27;
+        color: white;
+        border: none;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: transparent;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        font-weight: 600;
+        color: #6b7280;
+    }
+    .stTabs [aria-selected="true"] {
+        color: var(--brand-crimson) !important;
+        border-bottom-color: var(--brand-crimson) !important;
+    }
+    .metric-card {
+        background-color: #f9fafb;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
+        text-align: center;
+    }
+    .metric-label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #6b7280;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+    .metric-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #1a1a1a;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- HEADER ---
+st.title("Ulatus website counter tool")
+st.write("Professional Website Content Analysis")
+
+# --- APP LOGIC ---
+tab1, tab2 = st.tabs(["Single & Multiple Pages", "Full Website Crawler"])
+
+with tab1:
+    urls_input = st.text_area(
+        "Enter URLs here (one per line)",
+        placeholder="https://example.com\nhttps://ulatus.com",
+        height=150
+    )
+    
+    if st.button("Analyze Content", key="analyze_single"):
+        urls = [u.strip() for u in urls_input.split('\n') if u.strip()]
+        if not urls:
+            st.error("Please enter at least one URL")
+        else:
+            with st.spinner("Analyzing Content..."):
+                results = []
+                total_count = 0
+                
+                for url in urls:
+                    try:
+                        text = asyncio.run(fetch_website_text(url))
+                        stats = count_stats(text)
+                        results.append({
+                            "URL": url,
+                            "Title": url,
+                            "Count": stats['count'],
+                            "Type": stats['type'].upper(),
+                            "Group": stats['language_group']
+                        })
+                        total_count += stats['count']
+                    except Exception as e:
+                        results.append({
+                            "URL": url,
+                            "Title": "Fetch Failed",
+                            "Count": 0,
+                            "Type": "-",
+                            "Group": f"Error: {str(e)}"
+                        })
+                
+                # Summary Columns
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Total Count</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Pages</div><div class="metric-value">{len(results)}</div></div>', unsafe_allow_html=True)
+                with col3:
+                    primary_group = results[0]['Group'] if results else "-"
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
+                
+                st.write("### Detailed Analysis")
+                df = pd.DataFrame(results)
+                st.table(df)
+                
+                # CSV Export
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="ulatus_linguistic_report.csv",
+                    mime="text/csv",
+                    key="download_single"
+                )
+
+with tab2:
+    root_url = st.text_input(
+        "Enter website home URL",
+        placeholder="https://example.com"
+    )
+    
+    if st.button("Start Unlimited Crawl", key="analyze_crawl"):
+        if not root_url.strip():
+            st.error("Please enter a website URL")
+        else:
+            with st.spinner("Crawling Entire Website..."):
+                try:
+                    crawl_results = asyncio.run(crawl_site(root_url))
+                    
+                    if not crawl_results:
+                        st.warning("No pages found or analysis failed.")
+                    else:
+                        # Aggregation
+                        total_count = sum(r['stats']['count'] for r in crawl_results)
+                        primary_group = "CJK" if any(r['stats']['language_group'] == "CJK" for r in crawl_results) else "Latin"
+                        
+                        # Summary Columns
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown(f'<div class="metric-card"><div class="metric-label">Total Count</div><div class="metric-value">{total_count:,}</div></div>', unsafe_allow_html=True)
+                        with col2:
+                            st.markdown(f'<div class="metric-card"><div class="metric-label">Pages Crawled</div><div class="metric-value">{len(crawl_results)}</div></div>', unsafe_allow_html=True)
+                        with col3:
+                            st.markdown(f'<div class="metric-card"><div class="metric-label">Primary Mode</div><div class="metric-value">{primary_group}</div></div>', unsafe_allow_html=True)
+                        
+                        # Detailed Results
+                        st.write("### Detailed Analysis")
+                        flattened_results = []
+                        for res in crawl_results:
+                            flattened_results.append({
+                                "URL": res['url'],
+                                "Title": res['title'],
+                                "Count": res['stats']['count'],
+                                "Type": res['stats']['type'].upper(),
+                                "Group": res['stats']['language_group']
+                            })
+                        
+                        df_crawl = pd.DataFrame(flattened_results)
+                        st.table(df_crawl)
+                        
+                        # CSV Export
+                        csv_crawl = df_crawl.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="Download CSV",
+                            data=csv_crawl,
+                            file_name="ulatus_crawl_report.csv",
+                            mime="text/csv",
+                            key="download_crawl"
+                        )
+                except Exception as e:
+                    st.error(f"Crawling failed: {str(e)}")
