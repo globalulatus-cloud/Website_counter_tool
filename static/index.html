@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ulatus website counter tool</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Ulatus website counter tool</h1>
+            <p class="subtitle">Professional Website Content Analysis</p>
+        </header>
+
+        <nav class="mode-toggle">
+            <span id="singleMode" class="mode-option active" onclick="setMode('single')">Single & Multiple Pages</span>
+            <span id="crawlMode" class="mode-option" onclick="setMode('crawl')">Full Website Crawler</span>
+        </nav>
+
+        <main>
+            <section class="input-section">
+                <div id="singleInputArea">
+                    <textarea id="urlInput"
+                        placeholder="Enter URLs here (one per line)&#10;https://example.com&#10;https://ulatus.com"
+                        rows="5"></textarea>
+                    <small class="input-hint">Paste one or more URLs to analyze individually.</small>
+                </div>
+                <!-- Crawler uses a simple input but we'll manage with one for minimalism -->
+
+                <div class="action-bar">
+                    <button onclick="analyze()" id="submitBtn">Analyze Content</button>
+                </div>
+            </section>
+
+            <div id="loader" class="loader">
+                <div class="spinner"></div>
+                <p id="loaderText" style="margin-top: 1rem; color: var(--text-muted); font-size: 0.85rem;">Processing...
+                </p>
+            </div>
+
+            <div id="error" class="error-msg"></div>
+
+            <div id="resultsArea" class="results-container">
+                <div class="results-summary">
+                    <div class="summary-item">
+                        <span class="label">Total Count</span>
+                        <span id="totalCountVal" class="value">0</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Pages</span>
+                        <span id="pagesCrawledVal" class="value">0</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Primary Mode</span>
+                        <span id="overallLangVal" class="value">-</span>
+                    </div>
+                </div>
+
+                <div class="table-controls">
+                    <h3 style="font-size: 1rem; font-weight: 700;">Detailed Analysis</h3>
+                    <button class="btn-secondary" onclick="exportCSV()">Download CSV</button>
+                </div>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Page Title / Info</th>
+                                <th>Count</th>
+                                <th>Method</th>
+                                <th>URL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="lingo.js"></script>
+</body>
+
+</html>
