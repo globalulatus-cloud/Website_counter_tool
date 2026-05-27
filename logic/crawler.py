@@ -1,85 +1,155 @@
-import asyncio
-from typing import Set, List, Dict
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
+
 from bs4 import BeautifulSoup
-import httpx
+from playwright.async_api import async_playwright
+import trafilatura
+
 from logic.counter import count_stats
 
-async def crawl_site(start_url: str) -> List[Dict]:
-    domain = urlparse(start_url).netloc
-    to_visit = {start_url}
+
+def normalize_url(url: str) -> str:
+    parsed = urlparse(url)
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    return urlunparse((scheme, netloc, path, "", "", ""))
+
+
+def is_same_domain(url: str, root_domain: str) -> bool:
+    try:
+        return urlparse(url).netloc.lower().endswith(root_domain.lower())
+    except Exception:
+        return False
+
+
+def clean_text(text: str) -> str:
+    if not text:
+        return ""
+    return " ".join(text.replace("\u00a0", " ").split())
+
+
+def extract_title_from_html(html: str, fallback: str = "") -> str:
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+            if title:
+                return title
+    except Exception:
+        pass
+    return fallback
+
+
+def extract_links_from_html(html: str, base_url: str, root_domain: str) -> list[str]:
+    links = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if not href:
+                continue
+            absolute = urljoin(base_url, href)
+            parsed = urlparse(absolute)
+
+            if parsed.scheme not in ("http", "https"):
+                continue
+            if not is_same_domain(absolute, root_domain):
+                continue
+
+            links.append(normalize_url(absolute))
+    except Exception:
+        pass
+
+    seen = set()
+    out = []
+    for item in links:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+async def crawl_site(root_url: str, max_pages: int = 100) -> list[dict]:
+    root_url = normalize_url(root_url)
+    root_domain = urlparse(root_url).netloc
+
     visited = set()
+    queue = [root_url]
     results = []
-    
-    # Semaphore to limit concurrency (prevent overwhelming target/self)
-    semaphore = asyncio.Semaphore(5)
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=12.0, verify=False, headers=headers) as client:
-        while to_visit:
-            # Take a batch of URLs to process concurrently
-            current_batch = list(to_visit)
-            to_visit = set()
-            
-            tasks = []
-            for url in current_batch:
-                if url in visited:
-                    continue
-                visited.add(url)
-                tasks.append(process_page(url, client, semaphore, domain))
-            
-            if not tasks:
-                break
-                
-            batch_results = await asyncio.gather(*tasks)
-            
-            for page_res, found_links in batch_results:
-                if page_res:
-                    results.append(page_res)
-                for link in found_links:
-                    if link not in visited:
-                        to_visit.add(link)
-                
-    return results
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1440, "height": 1200},
+        )
 
-async def process_page(url: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, domain: str):
-    found_links = []
-    page_data = None
-    
-    async with semaphore:
         try:
-            response = await client.get(url)
-            if response.status_code != 200 or 'text/html' not in response.headers.get('Content-Type', ''):
-                return None, []
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Extract stats
-            for script_or_style in soup(["script", "style"]):
-                script_or_style.decompose()
-            
-            text = soup.get_text(separator=' ')
-            stats = count_stats(text)
-            
-            page_data = {
-                "url": url,
-                "stats": stats,
-                "title": soup.title.string.strip() if soup.title and soup.title.string else url
-            }
-            
-            # Find internal links
-            for link in soup.find_all('a', href=True):
-                full_url = urljoin(url, link['href'])
-                parsed = urlparse(full_url)
-                
-                # Domain check and normalization
-                if parsed.netloc == domain:
-                    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                    if clean_url.endswith('/'):
-                        clean_url = clean_url[:-1]
-                    found_links.append(clean_url)
-                    
-        except Exception as e:
-            print(f"Error processing {url}: {e}")
-            
-    return page_data, found_links
+            while queue and len(visited) < max_pages:
+                current_url = normalize_url(queue.pop(0))
+
+                if current_url in visited:
+                    continue
+
+                visited.add(current_url)
+
+                try:
+                    await page.goto(current_url, wait_until="networkidle", timeout=60000)
+                    await page.wait_for_timeout(1500)
+                    html = await page.content()
+
+                    title = extract_title_from_html(html, fallback=current_url)
+
+                    extracted = trafilatura.extract(
+                        html,
+                        include_comments=False,
+                        include_tables=False,
+                        include_links=False,
+                        include_images=False,
+                        output_format="txt",
+                    )
+
+                    if extracted:
+                        text = clean_text(extracted)
+                    else:
+                        soup = BeautifulSoup(html, "html.parser")
+                        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+                            tag.decompose()
+                        text = clean_text(soup.get_text(separator=" ", strip=True))
+
+                    stats = count_stats(text)
+
+                    results.append(
+                        {
+                            "url": current_url,
+                            "title": title,
+                            "stats": stats,
+                        }
+                    )
+
+                    links = extract_links_from_html(html, current_url, root_domain)
+                    for link in links:
+                        if link not in visited and link not in queue:
+                            queue.append(link)
+
+                except Exception as e:
+                    results.append(
+                        {
+                            "url": current_url,
+                            "title": "Fetch failed",
+                            "stats": {
+                                "count": 0,
+                                "type": "words",
+                                "language_group": f"Error: {str(e)}",
+                            },
+                        }
+                    )
+
+        finally:
+            await browser.close()
+
+    return results
